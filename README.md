@@ -13,7 +13,7 @@ Para evitar o desgaste prematuro do relé e gerenciar a alta inércia térmica d
 
 
 ## Especificações do Hardware
-* **Microcontrolador:** Arduino (ATmega328P).
+* **Microcontrolador:** Arduino Uno.
 * **Sensor de Temperatura:** DS18B20 (Digital, One-Wire) - Alta precisão e imunidade a ruído.
 * **Atuador:** Relé acoplado a uma carga resistiva de 1000W.
 * **Interface:** LCD 16x2 para monitoramento de temperatura e Setpoint, ajustado via potenciômetro.
