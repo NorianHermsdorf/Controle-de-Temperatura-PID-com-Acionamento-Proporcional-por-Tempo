@@ -1,123 +1,128 @@
-// INCLUSÃO DE BIBLIOTECAS
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <LiquidCrystal.h>
-#include <PID_v1.h>  // Biblioteca PID
+#include <LiquidCrystal_I2C.h>
 
-// DEFINIÇÕES DE PINOS
-#define pinZC  2
-#define pinDIM 4
-#define ONE_WIRE_BUS 7  // Porta de Leitura do sensor
-#define intervaloLeitura 1000
-#define backlightPin 11
-#define contrastPin 10
-#define POT_PIN A0 
+// ======================= CONSTANTES =========================
+const byte ONE_WIRE_BUS = 7;
+const byte RELAY_PIN = 4;
+const byte POT_PIN = A0;
 
-#define periodo 8333 // MICROSSEGUNDOS
-#define iMin 20 // INTENSIDADE MINIMA
-#define iMax 90 // INTENSIDADE MÁXIMA
+const int INTERVALO_LEITURA_SENSOR = 1000; // ms para ler o sensor
 
-// Inicialização do sensor de temperatura e do LCD
+// --- NOVAS CONSTANTES PARA O CONTROLE PROPORCIONAL ---
+const unsigned long JANELA_PWM = 5000; // Janela de tempo de 5 segundos (5000 ms)
+const double MAX_SAIDA_PD = 100.0;     // Valor máximo esperado da saída do PD (ajustável)
+
+// ======================= OBJETOS ===============================
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-LiquidCrystal lcd(3, 5, 6, 8, 9, 12);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// Variáveis de controle do tempo
-unsigned long controleTempo;
-int brilho = 255;
-int contraste = 50;
-float temperaturaIdeal = 0.0;
+// ======================= VARIÁVEIS GLOBAIS =============================
+unsigned long tempoLeituraSensor;
+float temperaturaIdeal = 50.0;
+float temperaturaAtual = 0.0;
 
-// Variáveis de controle de intensidade
-volatile int intensidade = 0; // Carregar variável da memória RAM em vez do registrador
+// Ganhos PD
+double Kp = 15.0;
+double Kd = 5.0;
 
-// Variáveis PID
-double Setpoint, Input, Output;
-double Kp = 5.0, Ki = 0, Kd = 0.0; // Ajustar conforme necessário
-PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);  // Configuração PID
+// Variáveis do PD
+double erroAnterior = 0;
+bool estadoRele = false;
 
+unsigned long tempoInicioJanela;
+double potenciaSaida = 0; 
+
+// ======================= SETUP ================================
 void setup() {
-  pinMode(A0, INPUT);
   Serial.begin(115200);
-  lcd.begin(16, 2); // Inicia o LCD com 16 colunas e 2 linhas
-  pinMode(pinDIM, OUTPUT);
-  pinMode(pinZC, INPUT);
-  attachInterrupt(digitalPinToInterrupt(pinZC), sinalZC, RISING);
-  
-  controleTempo = millis();
-  analogWrite(backlightPin, brilho);
-  analogWrite(contrastPin, contraste);
-  
-  lcd.setCursor(0, 0);
-  lcd.print("Temp Atual: ");
-  lcd.setCursor(0, 1);
-  lcd.print("Temp Desej: ");
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+
+  lcd.init();
+  lcd.backlight();
   
   sensors.begin();
 
-  // Inicializa o PID
-  myPID.SetMode(AUTOMATIC);
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  lcd.setCursor(0, 1);
+  lcd.print("Alvo: ");
   
-  Serial.println("Fim do Setup()");
+  tempoLeituraSensor = millis();
+  tempoInicioJanela = millis(); // Inicia a primeira janela de tempo
 }
 
-void loop() {
-  int potValue = analogRead(POT_PIN);
-  temperaturaIdeal = map(potValue, 0, 1023, 0, 100);  // Ajustar o range conforme necessário
-  Setpoint = temperaturaIdeal;
 
-  if (millis() - controleTempo > intervaloLeitura) {
-    sensors.requestTemperatures(); 
-    Input = sensors.getTempCByIndex(0); // Atualiza a temperatura atual
+void loop() { 
+   //Leitura do sensor e cálculo do PD --
+  if (millis() - tempoLeituraSensor >= INTERVALO_LEITURA_SENSOR) {
+    // Lê o potenciômetro para definir a temperatura ideal
+    int potValue = analogRead(POT_PIN);
+    temperaturaIdeal = map(potValue, 0, 1023, 20, 99);
 
-    // Se a temperatura ultrapassar o setpoint, desligar o aquecedor
-    if (Input >= temperaturaIdeal) {
-      intensidade = 0; // Desliga o aquecedor
-      Serial.print("Temperatura Atual: "); Serial.print(Input, 2);
-      Serial.println("Aquecedor desligado. Temperatura atingida.");
+    // Lê o sensor de temperatura
+    sensors.requestTemperatures();
+    float leitura = sensors.getTempCByIndex(0);
+
+    if (leitura != DEVICE_DISCONNECTED_C && leitura > -55 && leitura < 125) {
+      temperaturaAtual = leitura;
     } else {
-      // Calcula o PID
-      myPID.Compute();
-
-      // Mapeia a saída do PID (0-255) para a intensidade do dimmer (iMin a iMax)
-      intensidade = map((int)Output, 0, 255, iMin, iMax);
-
-      // Garante que a intensidade esteja entre iMin e iMax
-      intensidade = constrain(intensidade, iMin, iMax);
-
-      // Serial: Exibe a temperatura e intensidade a cada leitura
-      Serial.print("Temperatura Atual: "); Serial.print(Input, 2);
-      Serial.print(" C, Temperatura Ideal: "); Serial.print(Setpoint, 2);
-      Serial.print(" C, Intensidade: "); Serial.println(intensidade);
     }
 
-    // Atualiza o display LCD
-    lcd.setCursor(12, 0);
-    lcd.print(Input, 2); // Atualiza a temperatura atual no LCD
-    lcd.setCursor(12, 1);
-    lcd.print(Setpoint, 2); // Atualiza a temperatura desejada no LCD
+    // Controle PD
+    double erro = temperaturaIdeal - temperaturaAtual;
+    double derivada = erro - erroAnterior;
+    double saidaPD = (Kp * erro) + (Kd * derivada);
+
+    // Mapeia e limita a saída do PD para a faixa de potência (0 a MAX_SAIDA_PD)
+    potenciaSaida = constrain(saidaPD, 0, MAX_SAIDA_PD);
     
-    controleTempo += intervaloLeitura;
+    erroAnterior = erro;
+
+    tempoLeituraSensor = millis();
   }
 
-  // Função de controle do dimmer
-  lcd.setCursor(0, 0);
-  lcd.print("Temp Atual: ");
-  lcd.print(Setpoint, 2);  // Limita a 2 casas decimais
-  lcd.setCursor(0, 1);
-  lcd.print("Temp Desej: ");
-  lcd.clear();
-}
+  //Controle do Relé Proporcional ao Tempo (executa em todo loop) ---
+  unsigned long tempoAtual = millis();
+  
+  // Reinicia a janela de tempo se ela terminou
+  if (tempoAtual - tempoInicioJanela > JANELA_PWM) {
+    tempoInicioJanela = tempoAtual;
+  }
 
-// Implementação de função de controle de dimmer via interrupção
-void sinalZC() {
-  if (intensidade < iMin) return;
-  if (intensidade > iMax) intensidade = iMax;
+  // Calcula por quanto tempo o relé deve ficar ligado dentro da janela atual
+  unsigned long tempoLigado = JANELA_PWM * (potenciaSaida / MAX_SAIDA_PD);
 
-  int delayInt = periodo - (intensidade * (periodo / 100));
+  // Liga ou desliga o relé baseado no tempo decorrido dentro da janela
+  if (tempoAtual - tempoInicioJanela < tempoLigado) {
+    digitalWrite(RELAY_PIN, HIGH);
+    estadoRele = true;
+  } else {
+    digitalWrite(RELAY_PIN, LOW);
+    estadoRele = false;
+  }
 
-  delayMicroseconds(delayInt);
-  digitalWrite(pinDIM, HIGH);
-  delayMicroseconds(6);
-  digitalWrite(pinDIM, LOW);
+   unsigned long now = millis();
+  static unsigned long lastPrintTime = 0;
+  static unsigned long lastTime = 0;
+  lcd.setCursor(6, 0);
+  lcd.print(temperaturaAtual, 1);
+  lcd.print((char)223);
+  lcd.print("C ");
+
+  lcd.setCursor(6, 1);
+  lcd.print(temperaturaIdeal, 1);
+  lcd.print((char)223);
+  lcd.print("C ");
+
+  lcd.setCursor(13, 0);
+  lcd.print(estadoRele ? "ON " : "OFF");
+
+  if(now  - lastPrintTime >= 500){
+    lastPrintTime =  now;
+    Serial.print("Temperatura:"); Serial.print(temperaturaAtual); Serial.print("\t");
+    Serial.print("On_Off:"); Serial.println(tempoLigado/100);
+  }
 }
