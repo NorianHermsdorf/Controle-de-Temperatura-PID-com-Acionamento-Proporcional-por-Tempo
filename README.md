@@ -26,8 +26,7 @@ O sistema foi sintonizado para operar prioritariamente como um controlador **PD 
 
 ## Estrutura do Projeto
 * `/src`: Código fonte `.ino` com a implementação do algoritmo PID e lógica de temporização.
-* `/docs`: Relatório técnico com análise de resposta ao degrau e sintonia de parâmetros.
-* `/results`: Gráficos de performance para os setpoints de $40^{\circ}C$, $65^{\circ}C$ e $85^{\circ}C$.
+* `/docs`: Relatór com análise de resposta ao degrau, sintonia de parâmetros e com gráficos de performance para os setpoints de $40^{\circ}C$, $65^{\circ}C$ e $85^{\circ}C$.
 
 ## Resultados Alcançados
 * **Estabilidade:** Erro estacionário praticamente nulo após a estabilização.
